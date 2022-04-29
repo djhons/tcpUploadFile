@@ -9,20 +9,21 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
-const tarFirstDir = "file"
 const splitChar = ","
 
-var dir, host, skipDir string
+var dir, host, skipDir, suffix string
 var errorFlag bool
 
 func Init() {
 	flag.StringVar(&dir, "dir", "", "Compressed folder,[/var/www]")
 	flag.StringVar(&host, "host", "", "Server IP port,[192.168.1.1:8888]")
 	flag.StringVar(&skipDir, "skip", "", "skip folder")
+	flag.StringVar(&suffix, "suffix", "", "file type")
 	flag.BoolVar(&errorFlag, "err", true, "Exit in case of exception,Default true")
 }
 func main() {
@@ -61,12 +62,12 @@ func start(host, dir, module string) {
 }
 
 //发送压缩文件
-func sendData(path string, conn net.Conn) error {
+func sendData(dir string, conn net.Conn) error {
 	gw := gzip.NewWriter(conn)
 	tw := tar.NewWriter(gw)
 	defer gw.Close()
 	defer tw.Close()
-	return filepath.Walk(path, func(fileName string, fileInfo os.FileInfo, err error) error {
+	return filepath.Walk(dir, func(fileName string, fileInfo os.FileInfo, err error) error {
 		if err != nil {
 			return ProcessError(err)
 		}
@@ -74,21 +75,29 @@ func sendData(path string, conn net.Conn) error {
 		if excludeFile(fileName, fileInfo, skipDir) {
 			return filepath.SkipDir
 		}
-		//兼容windows
-		fileName = strings.ReplaceAll(fileName, "\\", "/")
+		//添加要打包的文件类型
+		if suffix != "" && path.Ext(fileName) != suffix {
+			return nil
+		}
+		fileName = filepath.ToSlash(filepath.Clean(fileName))
 		fileHeader, err := tar.FileInfoHeader(fileInfo, "")
 		if err != nil {
 			return ProcessError(err)
 		}
 		//替换绝对路径
-		fileName = filepath.Clean(fileName)
-		fileHeader.Name = tarFirstDir + "/" + strings.TrimPrefix(strings.ReplaceAll(fileName, filepath.Dir(fileName), ""), string(filepath.Separator))
+		if filepath.IsAbs(fileName) {
+			fileHeader.Name = strings.TrimPrefix(fileName, filepath.ToSlash(filepath.Dir(filepath.Clean(dir))))
+		} else {
+			fileHeader.Name = fileName
+		}
+
 		fileHeader.Format = tar.FormatGNU
 		if err := tw.WriteHeader(fileHeader); err != nil {
 			return ProcessError(err)
 		}
+		//忽略不是普通的文件
 		if !fileInfo.Mode().IsRegular() {
-			return ProcessError(err)
+			return nil
 		}
 		fileRead, err := os.Open(fileName)
 		defer fileRead.Close()
